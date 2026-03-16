@@ -19,10 +19,13 @@ import (
 	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/encoding"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
-	"connectrpc.com/vanguard/vanguardgrpc"
+	"connectrpc.com/vanguard"
 	"github.com/conblem/grpc-mock/pkg/stub"
 )
 
@@ -35,6 +38,7 @@ type Server struct {
 	svr        *grpc.Server
 	httpServer *http.Server
 	matcher    StubMatcher
+	fds        []*desc.FileDescriptor
 	wg         sync.WaitGroup
 }
 
@@ -47,6 +51,7 @@ func NewServer(addr string, m StubMatcher) *Server {
 }
 
 func (s *Server) RegisterServices(fds []*desc.FileDescriptor) {
+	s.fds = fds
 	sds := s.createGRPCServiceDesc(fds)
 	s.registerServices(sds)
 }
@@ -66,7 +71,7 @@ func (s *Server) Start() (err error) {
 	log.Infof("mock server starts on %v", lsn.Addr().String())
 	reflection.Register(s.svr)
 
-	transcoder, transcoderErr := vanguardgrpc.NewTranscoder(s.svr)
+	transcoder, transcoderErr := s.newTranscoder()
 	if transcoderErr != nil {
 		return fmt.Errorf("mock server: create transcoder failed: %v", transcoderErr)
 	}
@@ -93,6 +98,59 @@ func (s *Server) Stop() (err error) {
 	}()
 	<-done
 	return
+}
+
+// newTranscoder builds a vanguard transcoder using NewServiceWithSchema to
+// avoid REST route conflicts from google.api.http annotations in protos.
+func (s *Server) newTranscoder() (*vanguard.Transcoder, error) {
+	codecs := make([]string, 1, 2)
+	codecs[0] = vanguard.CodecProto
+	if encoding.GetCodec(vanguard.CodecJSON) != nil {
+		codecs = append(codecs, vanguard.CodecJSON)
+	}
+
+	// Build service descriptors from the file descriptors, stripping method
+	// options (which contain google.api.http annotations that cause REST
+	// route conflicts when multiple services share the same HTTP path).
+	fdset := desc.ToFileDescriptorSet(s.fds...)
+	for _, fd := range fdset.GetFile() {
+		for _, sd := range fd.GetService() {
+			for _, md := range sd.GetMethod() {
+				md.Options = nil
+			}
+		}
+	}
+	registry, err := protodesc.NewFiles(fdset)
+	if err != nil {
+		return nil, fmt.Errorf("build file registry: %w", err)
+	}
+
+	// Collect user-defined services using stripped descriptors.
+	knownServices := make(map[string]bool)
+	var services []*vanguard.Service
+	registry.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
+		sds := fd.Services()
+		for i := 0; i < sds.Len(); i++ {
+			sd := sds.Get(i)
+			services = append(services, vanguard.NewServiceWithSchema(sd, s.svr))
+			knownServices[string(sd.FullName())] = true
+		}
+		return true
+	})
+
+	// Add remaining services (e.g. reflection) from the gRPC server.
+	for svcName := range s.svr.GetServiceInfo() {
+		if !knownServices[svcName] {
+			services = append(services, vanguard.NewService(svcName, s.svr))
+		}
+	}
+
+	return vanguard.NewTranscoder(services,
+		vanguard.WithDefaultServiceOptions(
+			vanguard.WithTargetCodecs(codecs...),
+			vanguard.WithTargetProtocols(vanguard.ProtocolGRPC),
+		),
+	)
 }
 
 func (s *Server) createUnaryServerHandler(md *desc.MethodDescriptor) func(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
