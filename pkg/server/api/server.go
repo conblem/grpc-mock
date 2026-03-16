@@ -6,9 +6,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/eliobischof/grpc-mock/pkg/stub"
-	pbutils "github.com/eliobischof/grpc-mock/pkg/utils/pb"
-	mockpb "github.com/eliobischof/grpc-mock/proto/mock"
+	"github.com/conblem/grpc-mock/pkg/stub"
+	pbutils "github.com/conblem/grpc-mock/pkg/utils/pb"
+	mockpb "github.com/conblem/grpc-mock/proto/mock"
 )
 
 type StubManager interface {
