@@ -3,7 +3,7 @@ module github.com/conblem/grpc-mock
 go 1.25.0
 
 require (
-	connectrpc.com/vanguard v0.0.0
+	connectrpc.com/vanguard v0.4.0
 	github.com/golang/glog v1.2.4
 	github.com/golang/protobuf v1.5.4
 	github.com/grpc-ecosystem/grpc-gateway v1.16.0
@@ -27,5 +27,3 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260223185530-2f722ef697dc // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace connectrpc.com/vanguard => ./vanguard-go
