@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -14,11 +15,14 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/dynamic"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 
+	"connectrpc.com/vanguard/vanguardgrpc"
 	"github.com/conblem/grpc-mock/pkg/stub"
 )
 
@@ -27,10 +31,11 @@ type StubMatcher interface {
 }
 
 type Server struct {
-	addr    string
-	svr     *grpc.Server
-	matcher StubMatcher
-	wg      sync.WaitGroup
+	addr       string
+	svr        *grpc.Server
+	httpServer *http.Server
+	matcher    StubMatcher
+	wg         sync.WaitGroup
 }
 
 func NewServer(addr string, m StubMatcher) *Server {
@@ -60,10 +65,18 @@ func (s *Server) Start() (err error) {
 	}
 	log.Infof("mock server starts on %v", lsn.Addr().String())
 	reflection.Register(s.svr)
+
+	transcoder, transcoderErr := vanguardgrpc.NewTranscoder(s.svr)
+	if transcoderErr != nil {
+		return fmt.Errorf("mock server: create transcoder failed: %v", transcoderErr)
+	}
+
+	s.httpServer = &http.Server{Handler: h2c.NewHandler(transcoder, &http2.Server{})}
+
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		err = s.svr.Serve(lsn)
+		err = s.httpServer.Serve(lsn)
 	}()
 	return
 }
@@ -71,19 +84,14 @@ func (s *Server) Start() (err error) {
 func (s *Server) Stop() (err error) {
 	done := make(chan int, 1)
 	go func() {
-		s.svr.GracefulStop()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if shutdownErr := s.httpServer.Shutdown(ctx); shutdownErr != nil {
+			err = errors.New("gracefully stop server timeout")
+		}
 		close(done)
 	}()
-	t := time.NewTimer(3 * time.Second)
-	select {
-	case <-done:
-		if !t.Stop() {
-			<-t.C
-		}
-	case <-t.C:
-		s.svr.Stop()
-		err = errors.New("gracefully stop grpc server timeout")
-	}
+	<-done
 	return
 }
 

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"flag"
 	"fmt"
@@ -13,16 +11,12 @@ import (
 	"syscall"
 
 	log "github.com/golang/glog"
-	"github.com/golang/protobuf/proto"
 	"github.com/grpc-ecosystem/grpc-gateway/runtime"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/desc/protoparse"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
-	dppb "google.golang.org/protobuf/types/descriptorpb"
 
 	api "github.com/conblem/grpc-mock/pkg/server/api"
 	"github.com/conblem/grpc-mock/pkg/server/mock"
@@ -119,34 +113,14 @@ func registerFileDescriptors(fds []*desc.FileDescriptor) (err error) {
 			return true
 		}
 
-		var descBytes []byte
-		fdp := protodesc.ToFileDescriptorProto(fd)
-		descBytes, err = createFileDescriptorBytes(fdp)
-		if err != nil {
-			log.Infof("register proto '%s' failed: %v", fd.Path(), err)
+		if regErr := protoregistry.GlobalFiles.RegisterFile(fd); regErr != nil {
+			log.Infof("register proto '%s' failed: %v", fd.Path(), regErr)
 			return false
 		}
-		proto.RegisterFile(fd.Path(), descBytes)
 		log.Infoln("register proto", fd.Path())
 		return true
 	})
 	return
-}
-
-func createFileDescriptorBytes(fdp *dppb.FileDescriptorProto) ([]byte, error) {
-	pb := proto.Clone(fdp).(*dppb.FileDescriptorProto)
-	pb.SourceCodeInfo = nil
-
-	b, err := proto.Marshal(pb)
-	if err != nil {
-		return nil, err
-	}
-
-	var buf bytes.Buffer
-	w, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-	w.Write(b)
-	w.Close()
-	return buf.Bytes(), nil
 }
 
 func startAPIServer(addr string, svr mockpb.MockServer) {
@@ -166,19 +140,3 @@ func startAPIServer(addr string, svr mockpb.MockServer) {
 	}
 }
 
-func startMockServer(addr string, sds []*grpc.ServiceDesc) {
-	s := grpc.NewServer()
-	lsn, err := net.Listen("tcp4", addr)
-	if err != nil {
-		log.Fatalf("grpc mock server listen failed: %v", err)
-	}
-	log.Infof("grpc mock server starts on %v", lsn.Addr().String())
-	for _, sd := range sds {
-		s.RegisterService(sd, nil)
-	}
-	reflection.Register(s)
-	err = s.Serve(lsn)
-	if err != nil {
-		log.Fatalf("grpc mock server serve failed: %v", err)
-	}
-}
