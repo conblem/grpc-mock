@@ -81,7 +81,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("start mock server failed: %v", err)
 	}
-	fmt.Println("grpc server is listening on ", mockAddr)
+	fmt.Println("mock server (grpc, connect, grpc-web) is listening on ", mockAddr)
 	defer mockServer.Stop()
 
 	signals := make(chan os.Signal, 1)

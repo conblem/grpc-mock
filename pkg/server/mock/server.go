@@ -7,17 +7,24 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
+	"connectrpc.com/vanguard"
+	"connectrpc.com/vanguard/vanguardgrpc"
 	log "github.com/golang/glog"
 	"github.com/golang/protobuf/proto"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/dynamic"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/encoding"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/eliobischof/grpc-mock/pkg/stub"
 )
@@ -27,13 +34,20 @@ type StubMatcher interface {
 }
 
 type Server struct {
-	addr    string
-	svr     *grpc.Server
-	matcher StubMatcher
-	wg      sync.WaitGroup
+	addr       string
+	svr        *grpc.Server
+	httpServer *http.Server
+	matcher    StubMatcher
+	wg         sync.WaitGroup
 }
 
 func NewServer(addr string, m StubMatcher) *Server {
+	// Register JSON codec so vanguard can pass JSON requests through
+	// to the gRPC server without re-encoding to proto.
+	encoding.RegisterCodec(vanguardgrpc.NewCodec(&vanguard.JSONCodec{
+		MarshalOptions:   protojson.MarshalOptions{EmitUnpopulated: true},
+		UnmarshalOptions: protojson.UnmarshalOptions{DiscardUnknown: true},
+	}))
 	return &Server{
 		addr:    addr,
 		svr:     grpc.NewServer(),
@@ -60,10 +74,26 @@ func (s *Server) Start() (err error) {
 	}
 	log.Infof("mock server starts on %v", lsn.Addr().String())
 	reflection.Register(s.svr)
+
+	// Wrap gRPC server with vanguard transcoder to support
+	// Connect, gRPC, gRPC-Web protocols.
+	handler, err := vanguardgrpc.NewTranscoder(s.svr)
+	if err != nil {
+		return fmt.Errorf("mock server: create vanguard transcoder failed: %v", err)
+	}
+
+	// Use h2c to support both HTTP/2 (required for gRPC) and HTTP/1.1
+	// (used by Connect and gRPC-Web) on the same port.
+	s.httpServer = &http.Server{
+		Handler: h2c.NewHandler(handler, &http2.Server{}),
+	}
+
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		err = s.svr.Serve(lsn)
+		if serveErr := s.httpServer.Serve(lsn); serveErr != nil && serveErr != http.ErrServerClosed {
+			err = serveErr
+		}
 	}()
 	return
 }
@@ -71,18 +101,25 @@ func (s *Server) Start() (err error) {
 func (s *Server) Stop() (err error) {
 	done := make(chan int, 1)
 	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if shutdownErr := s.httpServer.Shutdown(ctx); shutdownErr != nil {
+			s.httpServer.Close()
+			err = errors.New("gracefully stop mock server timeout")
+		}
 		s.svr.GracefulStop()
 		close(done)
 	}()
-	t := time.NewTimer(3 * time.Second)
+	t := time.NewTimer(5 * time.Second)
 	select {
 	case <-done:
 		if !t.Stop() {
 			<-t.C
 		}
 	case <-t.C:
+		s.httpServer.Close()
 		s.svr.Stop()
-		err = errors.New("gracefully stop grpc server timeout")
+		err = errors.New("gracefully stop mock server timeout")
 	}
 	return
 }
