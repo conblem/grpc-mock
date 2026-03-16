@@ -26,7 +26,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 
-	"github.com/eliobischof/grpc-mock/pkg/stub"
+	"github.com/conblem/grpc-mock/pkg/stub"
 )
 
 type StubMatcher interface {

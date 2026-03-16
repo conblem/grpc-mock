@@ -24,10 +24,10 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	dppb "google.golang.org/protobuf/types/descriptorpb"
 
-	api "github.com/eliobischof/grpc-mock/pkg/server/api"
-	"github.com/eliobischof/grpc-mock/pkg/server/mock"
-	"github.com/eliobischof/grpc-mock/pkg/stub"
-	mockpb "github.com/eliobischof/grpc-mock/proto/mock"
+	api "github.com/conblem/grpc-mock/pkg/server/api"
+	"github.com/conblem/grpc-mock/pkg/server/mock"
+	"github.com/conblem/grpc-mock/pkg/stub"
+	mockpb "github.com/conblem/grpc-mock/proto/mock"
 )
 
 var (

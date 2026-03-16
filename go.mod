@@ -1,4 +1,4 @@
-module github.com/eliobischof/grpc-mock
+module github.com/conblem/grpc-mock
 
 go 1.25.0
 
